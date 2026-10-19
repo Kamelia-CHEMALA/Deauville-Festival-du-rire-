@@ -1,29 +1,29 @@
-import json
+"""Command-line interface for the Deauville festival."""
+
 import os
 import sys
-from deauville.storage import JsonStorage
+from datetime import date, datetime
+
 import uvicorn
-from datetime import datetime, date
-import deauville.festival
-from deauville.storage import JsonStorage
+
 from deauville.festival import (
+    Festival,
+    FestivalError,
     SoloShow,
-    slug,
-    load_festival,
-    find_venue,
-    find_artist,
-    programme,
-    start_of,
     end_of,
     festival_day_of,
-    validate_performance,
+    find_artist,
+    find_venue,
     performance_id,
-    FestivalError,
+    programme,
+    slug,
+    start_of,
 )
+from deauville.storage import JsonStorage, Storage
 
 
-
-def print_summary(festival):
+def print_summary(festival: Festival) -> None:
+    """Print the festival dates and its main statistics."""
     print(festival["name"])
     print(f"From {festival['first_day']} to {festival['last_day']}")
     print(
@@ -33,26 +33,23 @@ def print_summary(festival):
     )
 
 
-def print_venues(festival):
+def print_venues(festival: Festival) -> None:
+    """Print venue capacities and the total number of seats."""
     total_seats = 0
-
     for venue in festival["venues"]:
         venue_slug = slug(venue["name"])
         print(f"{venue_slug}: {venue['name']}, {venue['capacity']} seats")
         total_seats += venue["capacity"]
-
     print(f"Total: {total_seats} seats")
 
 
-def print_programme(festival, day):
+def print_programme(festival: Festival, day: date) -> None:
+    """Print the programme for a festival day, ending at 06:00."""
     print(f"Programme for {day:%A %d %B}:")
-
     for performance in programme(festival, day):
         venue = find_venue(festival, performance.venue)
-
         start = start_of(performance)
         end = end_of(performance)
-
         print(
             f"{start:%H:%M}-{end:%H:%M} | "
             f"{venue['name']} | "
@@ -60,24 +57,21 @@ def print_programme(festival, day):
         )
 
 
-def print_artist(festival, artist_slug):
+def print_artist(festival: Festival, artist_slug: str) -> None:
+    """Print an artist's performances and their role in each one."""
     artist = find_artist(festival, artist_slug)
-
     if artist is None:
         print(f"No artist '{artist_slug}'.")
         return
 
     print(artist["name"])
-
     for performance in festival["performances"]:
         role = performance.role_of(artist_slug)
-
         if role is not None:
             venue = find_venue(festival, performance.venue)
             start = start_of(performance)
             end = end_of(performance)
             festival_day = festival_day_of(performance)
-
             print(
                 f"{festival_day:%a %d} "
                 f"{start:%H:%M}-{end:%H:%M} | "
@@ -86,40 +80,31 @@ def print_artist(festival, artist_slug):
             )
 
 
-def print_now(festival, moment):
+def print_now(festival: Festival, moment: datetime) -> None:
+    """Print currently running shows and the next three upcoming shows."""
     on_stage = []
     upcoming = []
 
     for performance in festival["performances"]:
         start = start_of(performance)
         end = end_of(performance)
-
         if start <= moment < end:
             on_stage.append(performance)
-
         elif start > moment:
             upcoming.append(performance)
 
     upcoming = sorted(upcoming, key=start_of)[:3]
-
     print(f"On stage at {moment:%Y-%m-%d %H:%M}:")
-
     for performance in on_stage:
         venue = find_venue(festival, performance.venue)
         end = end_of(performance)
-
-        print(
-            f"- {performance.title} at "
-            f"{venue['name']}, until {end:%H:%M}"
-        )
+        print(f"- {performance.title} at {venue['name']}, until {end:%H:%M}")
 
     print("Up next:")
-
     for performance in upcoming:
         venue = find_venue(festival, performance.venue)
         start = start_of(performance)
         end = end_of(performance)
-
         print(
             f"- {start:%H:%M}-{end:%H:%M} | "
             f"{venue['name']} | "
@@ -127,14 +112,13 @@ def print_now(festival, moment):
         )
 
 
-def save_festival(festival, storage):
+def save_festival(festival: Festival, storage: Storage) -> None:
+    """Save festival data using the configured storage."""
     storage.save(festival)
 
-    with open("data/festival.json", "w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
 
-
-def add_performance(festival, storage):
+def add_performance(festival: Festival, storage: Storage) -> None:
+    """Interactively create, validate and save a solo performance."""
     title = input("Title: ")
     artist_slug = input("Artist (slug): ")
     venue_slug = input("Venue (slug): ")
@@ -144,51 +128,45 @@ def add_performance(festival, storage):
     try:
         duration = int(duration_text)
     except ValueError:
-        raise ValueError(
-            f"'{duration_text}' is not a number of minutes.")
+        raise ValueError(f"'{duration_text}' is not a number of minutes.") from None
 
     new_performance = SoloShow(
         title=title,
         venue=venue_slug,
         start=start,
         duration_minutes=duration,
-        artist=artist_slug
+        artist=artist_slug,
     )
-
     festival.add_performance(new_performance)
     save_festival(festival, storage)
-
     print(f"Added: {performance_id(new_performance)}")
 
 
-def cancel_performance(festival, performance_id_value, storage):
+def cancel_performance(
+    festival: Festival, performance_id_value: str, storage: Storage
+) -> None:
+    """Cancel a performance and persist the updated festival."""
     festival.cancel_performance(performance_id_value)
     save_festival(festival, storage)
     print(f"Cancelled {performance_id_value}")
 
 
-def main():
+def main() -> None:
+    """Dispatch CLI commands and support an optional JSON data path."""
     args = sys.argv[1:]
     data_path = "data/festival.json"
 
     if "--data" in args:
         index = args.index("--data")
-
         if index + 1 >= len(args):
             print("Error: --data requires a file path.")
             sys.exit(1)
-
         data_path = args[index + 1]
-        del args[index:index + 2]
+        del args[index : index + 2]
 
     os.environ["DEAUVILLE_DATA"] = data_path
-
     if args and args[0] == "serve":
-        uvicorn.run(
-            "deauville.api:app",
-            host="127.0.0.1",
-            port=8000
-        )
+        uvicorn.run("deauville.api:app", host="127.0.0.1", port=8000)
         return
 
     storage = JsonStorage(data_path)
@@ -197,37 +175,28 @@ def main():
     try:
         if len(args) == 0:
             print_summary(festival)
-
         elif args[0] == "venues" and len(args) == 1:
             print_venues(festival)
-
         elif args[0] == "programme" and len(args) == 2:
             try:
                 day = date.fromisoformat(args[1])
             except ValueError:
                 raise FestivalError(
                     f"'{args[1]}' is not a day, use YYYY-MM-DD."
-                )
+                ) from None
             print_programme(festival, day)
-
         elif args[0] == "artist" and len(args) == 2:
             print_artist(festival, args[1])
-
         elif args[0] == "now" and len(args) == 2:
             try:
                 moment = datetime.fromisoformat(args[1])
             except ValueError:
-                raise FestivalError(
-                    "Invalid date, use YYYY-MM-DDTHH:MM."
-                )
+                raise FestivalError("Invalid date, use YYYY-MM-DDTHH:MM.") from None
             print_now(festival, moment)
-
         elif args[0] == "add" and len(args) == 1:
             add_performance(festival, storage)
-
         elif args[0] == "cancel" and len(args) == 2:
             cancel_performance(festival, args[1], storage)
-
         else:
             print("Usage:")
             print("  uv run deauville")
@@ -239,7 +208,6 @@ def main():
             print("  uv run deauville cancel PERFORMANCE-ID")
             print("  uv run deauville serve")
             print("  Add --data FILE to use another JSON file.")
-
     except FestivalError as error:
         print(f"Error: {error}")
         sys.exit(1)
